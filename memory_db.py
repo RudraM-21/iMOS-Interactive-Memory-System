@@ -1,6 +1,7 @@
 import sqlite3
 from embedding import get_embedding
-
+import numpy as np
+import json
 
 
 def setup_db(db_path="memory.db"):
@@ -33,6 +34,23 @@ def add_memory(text, source="manual", db_path="memory.db") :
      memory_id = c.lastrowid
      conn.close()
      return memory_id
+
+
+def get_all_memories(db_path="memory.db"):
+
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute("SELECT id, text, embedding FROM memories")
+    rows = c.fetchall()
+    conn.close()
+    return [{
+        "id" : row[0],
+        "text" : row[1],
+        "embedding" : np.array(json.loads(row[2]))}
+        for row in rows
+    ]
+
+
 
 
 if __name__ == "__main__" :
