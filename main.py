@@ -1,3 +1,4 @@
+import sqlite3
 import typer
 from memory_db import setup_db, add_memory, get_all_memories
 import numpy as np
@@ -42,6 +43,19 @@ def ask(query: str, top_k: int=3):
     for rank, (score, memory_id, text) in enumerate(results[:top_k], 1):
         typer.secho(f"{rank}. [{memory_id}] {text}", fg=typer.colors.BRIGHT_GREEN)
         typer.echo(f"  (Score: {score:.3f})")
+
+
+@app.command()
+def links(id: int):
+    """Show linked memories for a memory ID"""
+    conn = sqlite3.connect("memory.db")
+    c = conn.cursor()
+    c.execute("SELECT target_id, similarity FROM memory_links WHERE source_id=?", (id,))
+    linked = c.fetchall()
+    conn.close()
+    for tgt, sim in linked:
+        typer.echo(f"Linked to #{tgt} (score: {sim:.2f})")
+
 
 
 if __name__ == "__main__" :
