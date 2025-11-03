@@ -2,6 +2,13 @@ import sqlite3
 from embedding import get_embedding
 import numpy as np
 import json
+import hashlib
+
+
+
+
+def compute_text_hash(text):
+    return hashlib.sha256(text.replace('\n', '').strip().encode('utf-8')).hexdigest()
 
 
 def cosine_sim(a,b):
@@ -17,7 +24,8 @@ def setup_db(db_path="memory.db"):
               text TEXT NOT NULL,
               embedding TEXT NOT NULL,
               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-              source TEXT DEFAULT 'manual'
+              source TEXT DEFAULT 'manual',
+              text_hash TEXT UNIQUE
               )    
 
 """)
@@ -29,10 +37,19 @@ def setup_db(db_path="memory.db"):
 def add_memory(text, source="manual", db_path="memory.db") :
      
      embedding = get_embedding(text)
+     text_hash = compute_text_hash(text)
      conn = sqlite3.connect(db_path)
      c = conn.cursor()
+
+     c.execute(
+     "SELECT id FROM memories WHERE text_hash = ?",(text_hash,))
+
+     if c.fetchone():
+        conn.close()
+        print(f"Skipped duplicate memory(hash : {text_hash[:8]})")
+        return None
         
-     c.execute("INSERT INTO memories (text, embedding, source) VALUES (?, ?, ?)", (text, embedding, source))
+     c.execute("INSERT INTO memories (text, embedding, source, text_hash) VALUES (?, ?, ?, ?)", (text, embedding, source, text_hash))
      conn.commit()
      memory_id = c.lastrowid
      conn.close()
