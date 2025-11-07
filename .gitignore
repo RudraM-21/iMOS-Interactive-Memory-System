@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Env files
+.env
+.env.*
+# keep example env template tracked
+!.env.example
+
+# Databases
+*.db
+*.sqlite
+memory.db
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
