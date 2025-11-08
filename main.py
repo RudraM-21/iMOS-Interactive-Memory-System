@@ -88,6 +88,23 @@ def ask(query: str, top_k: int=3):
     answer = get_llm_response(full_prompt, groq_api_key)
     typer.secho("\nIMOS>", fg=typer.colors.CYAN)
     typer.echo(answer)
+    sources = []
+    for mem in top_memories:
+        src = mem.get("source", "manual")
+        if src not in sources:
+           sources.append(src)
+
+    if sources:
+       print("\nSources referenced for this answer:")
+       for src in sources:
+        # If src is a filepath, format as link for clickable terminals (e.g., VSCode/iterm/zsh/Bash with support)
+        if os.path.exists(src):
+            abs_path = os.path.abspath(src)
+            print(f"  • {abs_path}")
+        else:
+            print(f"  • {src}")
+
+
 
 
 @app.command()
@@ -164,6 +181,23 @@ def chat(top_k: int = 3):
 
         # Print the answer (conversational, context-aware)
         print("\nIMOS>", answer)
+
+        sources = []
+        for mem in top_memories:
+           src = mem.get("source", "manual")
+           if src not in sources:
+               sources.append(src)
+
+        if sources:
+         print("\nSources referenced for this answer:")
+         for src in sources:
+          # If src is a filepath, format as link for clickable terminals (e.g., VSCode/iterm/zsh/Bash with support)
+          if os.path.exists(src):
+            abs_path = os.path.abspath(src)
+            print(f"  • {abs_path}")
+          else:
+            print(f"  • {src}")
+
         
         # Add assistant's answer to session history for future context
         session_history.append({
