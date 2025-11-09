@@ -1,6 +1,6 @@
 import sqlite3
 import typer
-from memory_db import setup_db, setup_links_table, add_memory, get_all_memories
+from memory_db import setup_db, setup_links_table, add_memory, get_all_memories, get_linked_memories
 import numpy as np
 from embedding import get_embedding
 import json
@@ -34,7 +34,7 @@ def add(text:str, source:str="manual"):
 
 
 @app.command()
-def ask(query: str, top_k: int=3):
+def ask(query: str, top_k: int=3, include_links: bool=True):
     """Ask IMOS a question, returns the most relevant memories."""
     
     query_emb = np.array(json.loads(get_embedding(query)))
@@ -46,6 +46,20 @@ def ask(query: str, top_k: int=3):
         search_results.append((score, memory))
     search_results.sort(reverse=True, key=lambda x:x[0])
     top_memories = [item[1] for item in search_results[:top_k]]
+    
+    # Expand with linked memories if enabled
+    all_context_memories = []
+    linked_memory_ids = set()
+    
+    for mem in top_memories:
+        all_context_memories.append(mem)
+        
+        if include_links:
+            linked = get_linked_memories(mem["id"])
+            for linked_mem in linked:
+                if linked_mem["id"] not in linked_memory_ids:
+                    all_context_memories.append(linked_mem)
+                    linked_memory_ids.add(linked_mem["id"])
 
     def build_prompt(query, memory_list):
         prompt = (
@@ -56,14 +70,16 @@ def ask(query: str, top_k: int=3):
         for memory in memory_list:
             source = memory.get("source","manual")
             txt = memory["text"].replace("\n", " ")
-            prompt += f"- [{source}] : {txt}\n"
+            # Mark linked memories differently
+            link_tag = " [LINKED]" if memory.get("link_similarity") else ""
+            prompt += f"- [{source}]{link_tag} : {txt}\n"
         prompt += (
             "\nPlease answer conversationally (like a friend or coach), weaving key insights."
             "Reference their notes (use file names if useful), and avoid robotic tone."
         )
         return prompt
     
-    full_prompt = build_prompt(query, top_memories)
+    full_prompt = build_prompt(query, all_context_memories)
 
     def get_llm_response(prompt, groq_api_key, model="llama-3.1-8b-instant"):
         api_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -88,16 +104,34 @@ def ask(query: str, top_k: int=3):
     answer = get_llm_response(full_prompt, groq_api_key)
     typer.secho("\nIMOS>", fg=typer.colors.CYAN)
     typer.echo(answer)
-    sources = []
+    
+    # Separate primary and linked sources
+    primary_sources = []
+    linked_sources = []
+    
     for mem in top_memories:
         src = mem.get("source", "manual")
-        if src not in sources:
-           sources.append(src)
+        if src not in primary_sources:
+           primary_sources.append(src)
+    
+    for mem in all_context_memories:
+        if mem.get("link_similarity"):  # It's a linked memory
+            src = mem.get("source", "manual")
+            if src not in linked_sources and src not in primary_sources:
+                linked_sources.append(src)
 
-    if sources:
-       print("\nSources referenced for this answer:")
-       for src in sources:
-        # If src is a filepath, format as link for clickable terminals (e.g., VSCode/iterm/zsh/Bash with support)
+    if primary_sources:
+       print("\n📚 Primary sources:")
+       for src in primary_sources:
+        if os.path.exists(src):
+            abs_path = os.path.abspath(src)
+            print(f"  • {abs_path}")
+        else:
+            print(f"  • {src}")
+    
+    if linked_sources:
+       print("\n🔗 Related memories (auto-linked):")
+       for src in linked_sources:
         if os.path.exists(src):
             abs_path = os.path.abspath(src)
             print(f"  • {abs_path}")
@@ -108,7 +142,7 @@ def ask(query: str, top_k: int=3):
 
 
 @app.command()
-def chat(top_k: int = 3):
+def chat(top_k: int = 3, include_links: bool = True):
     """
     Start IMOS in chat mode. You can ask multiple questions. Type 'exit' or 'quit' to stop.
     Now supports multi-turn session context for richer, conversational answers.
@@ -130,7 +164,8 @@ def chat(top_k: int = 3):
         for mem in memory_list:
             source = mem.get("source", "manual")
             txt = mem["text"].replace("\n", " ")
-            prompt += f"- [{source}]: {txt}\n"
+            link_tag = " [LINKED]" if mem.get("link_similarity") else ""
+            prompt += f"- [{source}]{link_tag}: {txt}\n"
         prompt += (
             "\nPlease answer conversationally, like a friend or coach, weaving relevant insights and facts. "
             "Cite file/source names when you reference a specific memory."
@@ -166,9 +201,23 @@ def chat(top_k: int = 3):
         ]
         search_results.sort(reverse=True, key=lambda x: x[0])
         top_memories = [item[1] for item in search_results[:top_k]]
+        
+        # Expand with linked memories
+        all_context_memories = []
+        linked_memory_ids = set()
+        
+        for mem in top_memories:
+            all_context_memories.append(mem)
+            
+            if include_links:
+                linked = get_linked_memories(mem["id"])
+                for linked_mem in linked:
+                    if linked_mem["id"] not in linked_memory_ids:
+                        all_context_memories.append(linked_mem)
+                        linked_memory_ids.add(linked_mem["id"])
 
         # Build memory context (relevant memories)
-        memory_context = build_memory_context(query, top_memories)
+        memory_context = build_memory_context(query, all_context_memories)
 
         # Add this turn to session: user question with memory context
         session_history.append({
@@ -182,16 +231,33 @@ def chat(top_k: int = 3):
         # Print the answer (conversational, context-aware)
         print("\nIMOS>", answer)
 
-        sources = []
+        # Separate primary and linked sources
+        primary_sources = []
+        linked_sources = []
+        
         for mem in top_memories:
            src = mem.get("source", "manual")
-           if src not in sources:
-               sources.append(src)
+           if src not in primary_sources:
+               primary_sources.append(src)
+        
+        for mem in all_context_memories:
+            if mem.get("link_similarity"):
+                src = mem.get("source", "manual")
+                if src not in linked_sources and src not in primary_sources:
+                    linked_sources.append(src)
 
-        if sources:
-         print("\nSources referenced for this answer:")
-         for src in sources:
-          # If src is a filepath, format as link for clickable terminals (e.g., VSCode/iterm/zsh/Bash with support)
+        if primary_sources:
+         print("\n📚 Primary sources:")
+         for src in primary_sources:
+          if os.path.exists(src):
+            abs_path = os.path.abspath(src)
+            print(f"  • {abs_path}")
+          else:
+            print(f"  • {src}")
+        
+        if linked_sources:
+         print("\n🔗 Related memories (auto-linked):")
+         for src in linked_sources:
           if os.path.exists(src):
             abs_path = os.path.abspath(src)
             print(f"  • {abs_path}")
@@ -220,6 +286,41 @@ def links(id: int):
     conn.close()
     for tgt, sim in linked:
         typer.echo(f"Linked to #{tgt} (score: {sim:.2f})")
+
+
+@app.command()
+def rebuild_links(threshold: float = 0.85):
+    """
+    Rebuild all memory links (slow for large databases).
+    Run this after bulk imports or periodically to find related memories.
+    Use --threshold to adjust similarity threshold (0.0-1.0, default 0.85).
+    """
+    from memory_db import auto_link_memory
+    
+    conn = sqlite3.connect("memory.db")
+    c = conn.cursor()
+    
+    # Clear existing links
+    c.execute("DELETE FROM memory_links")
+    conn.commit()
+    
+    # Get all memories
+    c.execute("SELECT id, embedding FROM memories")
+    all_memories = c.fetchall()
+    conn.close()
+    
+    total = len(all_memories)
+    typer.echo(f"Rebuilding links for {total} memories (threshold={threshold})...")
+    
+    for idx, (mid, emb_str) in enumerate(all_memories, 1):
+        emb = np.array(json.loads(emb_str))
+        auto_link_memory(mid, emb, threshold=threshold)
+        
+        # Progress indicator
+        if idx % 10 == 0 or idx == total:
+            typer.echo(f"  Progress: {idx}/{total}")
+    
+    typer.secho(f"\n✅ Done! Rebuilt all memory links.", fg=typer.colors.GREEN)
 
 
 @app.command()

@@ -34,7 +34,7 @@ def setup_db(db_path="memory.db"):
     conn.close()
 
 
-def add_memory(text, source="manual", db_path="memory.db") :
+def add_memory(text, source="manual", db_path="memory.db", auto_link=False) :
      
      embedding = get_embedding(text)
      text_hash = compute_text_hash(text)
@@ -53,13 +53,19 @@ def add_memory(text, source="manual", db_path="memory.db") :
      conn.commit()
      memory_id = c.lastrowid
      conn.close()
-     auto_link_memory(memory_id, np.array(json.loads(embedding)), db_path=db_path)
+     
+     if auto_link:
+         try:
+             auto_link_memory(memory_id, np.array(json.loads(embedding)), db_path=db_path)
+         except Exception as e:
+             print(f"Warning: Could not auto-link memory {memory_id}: {e}")
+     
      return memory_id
 
 def auto_link_memory(new_id, new_emb, db_path="memory.db", threshold=0.85):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
-    c.execute("SELECT id, embedding FROM memories WHERE id != ?", (new_id,))
+    c.execute("SELECT id, embedding FROM memories WHERE id <> ?", (new_id,))
     for row in c.fetchall():
         old_id, old_emb_str = row
         old_emb = np.array(json.loads(old_emb_str))
@@ -81,15 +87,57 @@ def get_all_memories(db_path="memory.db"):
 
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
-    c.execute("SELECT id, text, embedding FROM memories")
+    c.execute("SELECT id, text, embedding, source FROM memories")
     rows = c.fetchall()
     conn.close()
     return [{
         "id" : row[0],
         "text" : row[1],
-        "embedding" : np.array(json.loads(row[2]))}
+        "embedding" : np.array(json.loads(row[2])),
+        "source": row[3]}
         for row in rows
     ]
+
+
+def get_linked_memories(memory_id, db_path="memory.db", min_similarity=0.85):
+    """
+    Get all memories linked to a given memory ID.
+    Returns list of memory dicts with similarity scores.
+    """
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    
+    # Get both directions of links (source->target and target->source)
+    c.execute("""
+        SELECT target_id, similarity FROM memory_links 
+        WHERE source_id = ? AND similarity >= ?
+        UNION
+        SELECT source_id, similarity FROM memory_links 
+        WHERE target_id = ? AND similarity >= ?
+    """, (memory_id, min_similarity, memory_id, min_similarity))
+    
+    linked_ids = c.fetchall()
+    
+    if not linked_ids:
+        conn.close()
+        return []
+    
+    # Fetch full memory data for linked IDs
+    linked_memories = []
+    for lid, sim in linked_ids:
+        c.execute("SELECT id, text, embedding, source FROM memories WHERE id = ?", (lid,))
+        row = c.fetchone()
+        if row:
+            linked_memories.append({
+                "id": row[0],
+                "text": row[1],
+                "embedding": np.array(json.loads(row[2])),
+                "source": row[3],
+                "link_similarity": sim
+            })
+    
+    conn.close()
+    return linked_memories
 
 
 def setup_links_table(db_path="memory.db"):
