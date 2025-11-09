@@ -3,9 +3,49 @@ from embedding import get_embedding
 import numpy as np
 import json
 import hashlib
+import re
 
 
-
+def extract_actions_from_text(text):
+    """
+    Extract action items from text with flexible pattern matching.
+    Handles various formats like:
+    - TODO: Do something
+    - TODO : Do something (with space before colon)
+    - Action - Do something
+    - TASK Do something (no punctuation)
+    - - [ ] Do something (markdown checkbox)
+    - * [ ] Do something (markdown checkbox)
+    """
+    actions = []
+    
+    # Pattern 1: Action keywords with optional punctuation and flexible spacing
+    # Matches: TODO:, TODO :, TODO-, TODO , etc.
+    keyword_pattern = re.compile(
+        r'^\s*(?:TODO|Action|Next|Follow\s*Up|Task)\s*[:\-]?\s*(.+)$', 
+        re.IGNORECASE | re.MULTILINE
+    )
+    
+    # Pattern 2: Markdown-style checkboxes
+    # Matches: - [ ] something, * [ ] something
+    checkbox_pattern = re.compile(
+        r'^\s*[-*]\s*\[\s*\]\s*(.+)$', 
+        re.MULTILINE
+    )
+    
+    # Extract from keyword patterns
+    for match in keyword_pattern.finditer(text):
+        action_text = match.group(1).strip()
+        if action_text:  # Only add non-empty actions
+            actions.append(action_text)
+    
+    # Extract from checkbox patterns
+    for match in checkbox_pattern.finditer(text):
+        action_text = match.group(1).strip()
+        if action_text:  # Only add non-empty actions
+            actions.append(action_text)
+    
+    return actions
 
 def compute_text_hash(text):
     return hashlib.sha256(text.replace('\n', '').strip().encode('utf-8')).hexdigest()
@@ -53,6 +93,18 @@ def add_memory(text, source="manual", db_path="memory.db", auto_link=False) :
      conn.commit()
      memory_id = c.lastrowid
      conn.close()
+
+     actions = extract_actions_from_text(text)
+     if actions:
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        for action in actions:
+            c.execute(
+                "INSERT INTO actions (action_text, source, memory_id) VALUES (?, ?, ?)",
+                (action, source, memory_id)
+            )
+        conn.commit()
+        conn.close()
      
      if auto_link:
          try:
@@ -84,7 +136,7 @@ def auto_link_memory(new_id, new_emb, db_path="memory.db", threshold=0.85):
 
 
 def get_all_memories(db_path="memory.db"):
-
+    """Get all memories with embeddings. Use with caution for large databases."""
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute("SELECT id, text, embedding, source FROM memories")
@@ -97,6 +149,58 @@ def get_all_memories(db_path="memory.db"):
         "source": row[3]}
         for row in rows
     ]
+
+def search_memories_fast(query_embedding, top_k=5, db_path="memory.db"):
+    """
+    Fast memory search using vectorized operations.
+    Returns top_k most similar memories without loading all into memory.
+    """
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    
+    # Get all embeddings and IDs (still need to load for similarity, but more efficient)
+    c.execute("SELECT id, embedding, text, source FROM memories")
+    rows = c.fetchall()
+    conn.close()
+    
+    if not rows:
+        return []
+    
+    # Vectorized similarity computation
+    ids = []
+    embeddings = []
+    texts = []
+    sources = []
+    
+    for row in rows:
+        ids.append(row[0])
+        embeddings.append(np.array(json.loads(row[1])))
+        texts.append(row[2])
+        sources.append(row[3])
+    
+    # Stack embeddings for vectorized operations
+    embeddings_matrix = np.stack(embeddings)
+    
+    # Vectorized cosine similarity
+    query_norm = np.linalg.norm(query_embedding)
+    embedding_norms = np.linalg.norm(embeddings_matrix, axis=1)
+    similarities = np.dot(embeddings_matrix, query_embedding) / (embedding_norms * query_norm)
+    
+    # Get top_k indices
+    top_indices = np.argpartition(similarities, -top_k)[-top_k:]
+    top_indices = top_indices[np.argsort(similarities[top_indices])[::-1]]
+    
+    results = []
+    for idx in top_indices:
+        results.append({
+            "id": ids[idx],
+            "text": texts[idx],
+            "source": sources[idx],
+            "embedding": embeddings[idx],
+            "similarity": similarities[idx]
+        })
+    
+    return results
 
 
 def get_linked_memories(memory_id, db_path="memory.db", min_similarity=0.85):

@@ -1,6 +1,6 @@
 import sqlite3
 import typer
-from memory_db import setup_db, setup_links_table, add_memory, get_all_memories, get_linked_memories
+from memory_db import setup_db, setup_links_table, add_memory, get_all_memories, get_linked_memories, search_memories_fast
 import numpy as np
 from embedding import get_embedding
 import json
@@ -38,14 +38,9 @@ def ask(query: str, top_k: int=3, include_links: bool=True):
     """Ask IMOS a question, returns the most relevant memories."""
     
     query_emb = np.array(json.loads(get_embedding(query)))
-    memories = get_all_memories()
-    search_results =[]
-
-    for memory in memories :
-        score = cosine_sim(query_emb, memory["embedding"])
-        search_results.append((score, memory))
-    search_results.sort(reverse=True, key=lambda x:x[0])
-    top_memories = [item[1] for item in search_results[:top_k]]
+    
+    # Use fast vectorized search instead of loading all memories
+    top_memories = search_memories_fast(query_emb, top_k)
     
     # Expand with linked memories if enabled
     all_context_memories = []
@@ -151,8 +146,6 @@ def chat(top_k: int = 3, include_links: bool = True):
     groq_api_key = os.getenv("GROQ_API_KEY")
     print("IMOS Chat Mode. Type your question; type 'exit' to leave.")
 
-    # Load all memories and embeddings once for session speed
-    memories = get_all_memories()
     session_history = [
         {"role": "system", "content": "You are IMOS, a thoughtful, local memory assistant. Answer like a friend, always referencing the user's memories as needed."}
     ]
@@ -184,9 +177,31 @@ def chat(top_k: int = 3, include_links: bool = True):
             "max_tokens": 512,
             "temperature": 0.6
         }
-        response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()['choices'][0]['message']['content']
+        
+        try:
+            response = requests.post(api_url, headers=headers, json=payload)
+            response.raise_for_status()
+            return response.json()['choices'][0]['message']['content']
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 413:  # Payload too large
+                print("⚠️  Context too long, trimming conversation history...")
+                return "I notice our conversation is getting quite long. Let me reset to keep things flowing smoothly. What was your question again?"
+            elif e.response.status_code == 429:  # Rate limit
+                print("⚠️  API rate limit hit. Please wait a moment and try again...")
+                return "I'm hitting the API rate limit. Please wait a few seconds and ask your question again."
+            else:
+                print(f"⚠️  API Error {e.response.status_code}: {e.response.reason}")
+                return f"Sorry, I encountered an API error. Please try again in a moment."
+
+    def trim_session_history(session_history, max_messages=6):
+        """Keep only system prompt + recent messages to prevent context overflow"""
+        if len(session_history) <= max_messages:
+            return session_history
+        
+        # Always keep system prompt (first message) + recent messages
+        system_prompt = session_history[0]
+        recent_messages = session_history[-(max_messages-1):]
+        return [system_prompt] + recent_messages
 
     while True:
         query = input("imos> ").strip()
@@ -194,13 +209,12 @@ def chat(top_k: int = 3, include_links: bool = True):
             print("Exiting IMOS Chat. All recent conversations are in your log (if enabled).")
             break
 
+        # Echo back the user's question for better conversation flow
+        print(f"\nYou: {query}")
+
         query_emb = np.array(json.loads(get_embedding(query)))
-        search_results = [
-            (np.dot(query_emb, memory["embedding"]) / (np.linalg.norm(query_emb) * np.linalg.norm(memory["embedding"])), memory)
-            for memory in memories
-        ]
-        search_results.sort(reverse=True, key=lambda x: x[0])
-        top_memories = [item[1] for item in search_results[:top_k]]
+        # Use fast vectorized search instead of loading all memories
+        top_memories = search_memories_fast(query_emb, top_k)
         
         # Expand with linked memories
         all_context_memories = []
@@ -224,6 +238,9 @@ def chat(top_k: int = 3, include_links: bool = True):
             "role": "user",
             "content": f"{query}\n\n{memory_context}"
         })
+
+        # Trim history to prevent context overflow
+        session_history = trim_session_history(session_history, max_messages=8)
 
         # Get LLM answer from Groq, given all session context so far
         answer = get_llm_response(session_history, groq_api_key)
@@ -330,6 +347,35 @@ def list():
     for memory in memories:
         snippet = memory["text"][:60].replace('\n',' ')
         typer.echo(f"[{memory['id']:>3}] {snippet}" + ("..." if len(memory["text"]) > 60 else ""))
+
+
+@app.command()
+def actions():
+    """List all open actions items detected from your knowledge."""
+
+    conn = sqlite3.connect("memory.db")
+    c = conn.cursor()
+    c.execute("SELECT id, action_text, source, created_at FROM actions WHERE status = 'open'")
+    actions = c.fetchall()
+    if not actions:
+        print("No open actions! You're on top of things.")
+    else :
+        print("Open Actions Items:")
+        for aid, text, src, dt in actions:
+            print(f"[{aid}] {text} (source: {src}, added: {dt[:10]})")
+    conn.close()
+              
+
+@app.command()
+def done(action_id:int):
+    """Mark an action as completed"""
+
+    conn = sqlite3.connect("memory.db")
+    c = conn.cursor()
+    c.execute("UPDATE actions SET status = 'done' WHERE id=?",(action_id,))
+    conn.commit()
+    print(f"Action {action_id} marked as done.")
+    conn.close()
 
 
 @app.command()
