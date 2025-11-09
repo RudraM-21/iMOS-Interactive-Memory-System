@@ -1,5 +1,5 @@
 import sqlite3
-from embedding import get_embedding
+from .embedding import get_embedding
 import numpy as np
 import json
 import hashlib
@@ -69,6 +69,19 @@ def setup_db(db_path="memory.db"):
               )    
 
 """)
+    
+    # Setup actions table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS actions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_text TEXT NOT NULL,
+            source TEXT DEFAULT 'manual',
+            memory_id INTEGER,
+            status TEXT DEFAULT 'open',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(memory_id) REFERENCES memories(id)
+        )
+    """)
     
     conn.commit()
     conn.close()
@@ -265,4 +278,3 @@ def setup_links_table(db_path="memory.db"):
 if __name__ == "__main__" :
     setup_db()
     setup_links_table()
-    

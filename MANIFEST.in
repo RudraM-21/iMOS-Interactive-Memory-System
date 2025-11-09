@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include requirements.txt
+include .env.example
+recursive-include imos *.py
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .git*
+global-exclude *.db

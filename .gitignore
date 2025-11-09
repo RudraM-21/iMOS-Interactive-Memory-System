@@ -1,6 +1,27 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
 # Env files
 .env
@@ -8,14 +29,16 @@ __pycache__/
 # keep example env template tracked
 !.env.example
 
-# Databases
+# IMOS specific - databases and user data
 *.db
 *.sqlite
 memory.db
+*.db-journal
 
 # VS Code
 .vscode/
 
 # OS
 .DS_Store
+Thumbs.db
 Thumbs.db
