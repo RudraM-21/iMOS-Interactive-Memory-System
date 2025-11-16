@@ -65,7 +65,8 @@ def setup_db(db_path="memory.db"):
               embedding TEXT NOT NULL,
               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
               source TEXT DEFAULT 'manual',
-              text_hash TEXT UNIQUE
+              text_hash TEXT UNIQUE,
+              type TEXT DEFAULT 'note'
               )    
 
 """)
@@ -83,11 +84,27 @@ def setup_db(db_path="memory.db"):
         )
     """)
     
+    # Setup chat logs table for timeline
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS chat_logs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT NOT NULL,
+            response TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Add type column to existing memories if it doesn't exist
+    c.execute("PRAGMA table_info(memories)")
+    columns = [column[1] for column in c.fetchall()]
+    if 'type' not in columns:
+        c.execute("ALTER TABLE memories ADD COLUMN type TEXT DEFAULT 'note'")
+    
     conn.commit()
     conn.close()
 
 
-def add_memory(text, source="manual", db_path="memory.db", auto_link=False) :
+def add_memory(text, source="manual", db_path="memory.db", auto_link=False, memory_type="note") :
      
      embedding = get_embedding(text)
      text_hash = compute_text_hash(text)
@@ -102,7 +119,8 @@ def add_memory(text, source="manual", db_path="memory.db", auto_link=False) :
         print(f"Skipped duplicate memory(hash : {text_hash[:8]})")
         return None
         
-     c.execute("INSERT INTO memories (text, embedding, source, text_hash) VALUES (?, ?, ?, ?)", (text, embedding, source, text_hash))
+     c.execute("INSERT INTO memories (text, embedding, source, text_hash, type) VALUES (?, ?, ?, ?, ?)", 
+               (text, embedding, source, text_hash, memory_type))
      conn.commit()
      memory_id = c.lastrowid
      conn.close()
@@ -271,6 +289,106 @@ def setup_links_table(db_path="memory.db"):
               UNIQUE(source_id, target_id))
 
 """)
+    conn.commit()
+    conn.close()
+
+
+def get_timeline(date=None, since=None, last=None, db_path="memory.db"):
+    """
+    Get timeline of all user activities (memories, actions, chats) with filtering options.
+    
+    Args:
+        date: Specific date (YYYY-MM-DD) to show activities from
+        since: Show activities since date (YYYY-MM-DD)  
+        last: Show last N entries
+        db_path: Database file path
+    
+    Returns:
+        List of timeline entries with (type, text, created_at, source)
+    """
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    
+    # Combine all activities from different tables
+    query = """
+    SELECT 
+        'memory' as activity_type,
+        CASE 
+            WHEN type = 'chat' THEN 'Chat Memory'
+            WHEN type = 'note' THEN 'Note'
+            WHEN type = 'file' THEN 'File Import'
+            ELSE 'Memory'
+        END as display_type,
+        CASE 
+            WHEN length(text) > 100 THEN substr(text, 1, 100) || '...'
+            ELSE text
+        END as display_text,
+        created_at,
+        source,
+        type
+    FROM memories
+    
+    UNION ALL
+    
+    SELECT 
+        'action' as activity_type,
+        CASE 
+            WHEN status = 'open' THEN 'Open Action'
+            ELSE 'Completed Action'
+        END as display_type,
+        action_text as display_text,
+        created_at,
+        source,
+        status as type
+    FROM actions
+    
+    UNION ALL
+    
+    SELECT 
+        'chat' as activity_type,
+        'Chat Session' as display_type,
+        'Q: ' || substr(query, 1, 80) || (CASE WHEN length(query) > 80 THEN '...' ELSE '' END) as display_text,
+        created_at,
+        'chat' as source,
+        'question' as type
+    FROM chat_logs
+    """
+    
+    filters = []
+    params = []
+    
+    # Add date filters
+    if date:
+        filters.append("date(created_at) = date(?)")
+        params.append(date)
+    elif since:
+        filters.append("date(created_at) >= date(?)")
+        params.append(since)
+    
+    # Apply filters if any
+    if filters:
+        query = f"SELECT * FROM ({query}) WHERE {' AND '.join(filters)}"
+    
+    # Order by most recent first
+    query += " ORDER BY created_at DESC"
+    
+    # Limit results if requested
+    if last:
+        query += " LIMIT ?"
+        params.append(last)
+    
+    c.execute(query, params)
+    results = c.fetchall()
+    conn.close()
+    
+    return results
+
+
+def log_chat_interaction(query, response, db_path="memory.db"):
+    """Log chat interactions for timeline tracking"""
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+    c.execute("INSERT INTO chat_logs (query, response) VALUES (?, ?)", (query, response))
     conn.commit()
     conn.close()
 

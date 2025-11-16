@@ -1,6 +1,6 @@
 import sqlite3
 import typer
-from .memory_db import setup_db, setup_links_table, add_memory, get_all_memories, get_linked_memories, search_memories_fast
+from .memory_db import setup_db, setup_links_table, add_memory, get_all_memories, get_linked_memories, search_memories_fast, get_timeline, log_chat_interaction
 import numpy as np
 from .embedding import get_embedding
 import json
@@ -350,6 +350,88 @@ def chat(top_k: int = 3, include_links: bool = True):
         })
 
 @app.command()
+def timeline(
+    date: str = typer.Option("", "--date", help="Show activities from specific date (YYYY-MM-DD)"),
+    since: str = typer.Option("", "--since", help="Show activities since date (YYYY-MM-DD)"), 
+    last: int = typer.Option(10, "--last", help="Show last N entries (default: 10)")
+):
+    """
+    Show your IMOS memory timeline: notes, chats, actions, and file imports over time
+    
+    Examples:
+      imos timeline                    # Show last 10 activities
+      imos timeline --last 20          # Show last 20 activities  
+      imos timeline --date 2025-11-16  # Show activities from specific date
+      imos timeline --since 2025-11-10 # Show activities since date
+    """
+    setup_db()
+    setup_links_table()
+    
+    # Get timeline entries
+    entries = get_timeline(
+        date=date if date else None,
+        since=since if since else None, 
+        last=last if not (date or since) else None
+    )
+    
+    if not entries:
+        typer.secho("IMOS: No activities found for the specified period.", fg=typer.colors.YELLOW)
+        return
+    
+    # Display header
+    period_desc = ""
+    if date:
+        period_desc = f" for {date}"
+    elif since:
+        period_desc = f" since {since}"
+    else:
+        period_desc = f" (last {len(entries)} entries)"
+    
+    typer.echo()
+    typer.secho("=" * 60, fg=typer.colors.BRIGHT_CYAN)
+    typer.secho(f"📅 IMOS Memory Timeline{period_desc}", fg=typer.colors.BRIGHT_CYAN, bold=True)
+    typer.secho("=" * 60, fg=typer.colors.BRIGHT_CYAN)
+    typer.echo()
+    
+    # Color mapping for different activity types
+    type_colors = {
+        'memory': typer.colors.BLUE,
+        'action': typer.colors.GREEN, 
+        'chat': typer.colors.CYAN,
+        'file': typer.colors.MAGENTA
+    }
+    
+    # Display timeline entries
+    for activity_type, display_type, display_text, created_at, source, type_detail in entries:
+        # Format timestamp
+        timestamp = created_at.replace('T', ' ')[:16] if 'T' in created_at else created_at[:16]
+        
+        # Choose color based on activity type
+        color = type_colors.get(activity_type, typer.colors.WHITE)
+        
+        # Create activity icon
+        icons = {
+            'memory': '📝',
+            'action': '✅' if type_detail == 'done' else '📋',
+            'chat': '💬',
+            'file': '📁'
+        }
+        icon = icons.get(activity_type, '•')
+        
+        # Display the timeline entry
+        typer.secho(f"[{timestamp}] {icon} {display_type}", fg=color, bold=True)
+        typer.echo(f"    {display_text}")
+        
+        # Show source if not default
+        if source and source != 'manual' and source != 'chat':
+            typer.secho(f"    📂 Source: {source}", fg=typer.colors.BLUE, dim=True)
+        
+        typer.echo()  # Add spacing between entries
+    
+    # Show summary
+    typer.secho(f"📊 Total activities shown: {len(entries)}", fg=typer.colors.GREEN, bold=True)
+
+@app.command()
 def actions():
     """List all open action items detected from your knowledge"""
     setup_db()
@@ -397,7 +479,7 @@ def addfile(path: str):
     
     try:
         text = extract_text_from_file(path)
-        memory_id = add_memory(text, source=path)
+        memory_id = add_memory(text, source=path, memory_type="file")
         typer.secho(f"IMOS: Imported '{path}' as memory #{memory_id}", fg=typer.colors.GREEN, bold=True)
     except Exception as e:
         typer.secho(f"IMOS Error: Could not import file - {e}", fg=typer.colors.RED, bold=True)
@@ -428,7 +510,7 @@ def import_folder(path: str):
                 fpath = os.path.join(root, fname)
                 try:
                     text = extract_text_from_file(fpath)
-                    add_memory(text, source=fpath)
+                    add_memory(text, source=fpath, memory_type="file")
                     imported += 1
                     typer.secho(f"  ✓ Imported: {fpath}", fg=typer.colors.GREEN)
                 except Exception as e:
