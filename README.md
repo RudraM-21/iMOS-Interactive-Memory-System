@@ -207,7 +207,7 @@ pip install -v imos
 
 ## Development & Contributing
 
-IMOS is open source! Visit our [GitHub repository](https://github.com/Sumitagarwal-i/IMOS_terminal) to:
+IMOS is open source! Visit our [GitHub repository](https://github.com/RudraM-21/IMOS_terminal) to:
 - Report issues
 - Submit feature requests  
 - Contribute code
@@ -215,7 +215,7 @@ IMOS is open source! Visit our [GitHub repository](https://github.com/Sumitagarw
 
 ## Support
 
-- **GitHub Issues**: [Report bugs or request features](https://github.com/Sumitagarwal-i/IMOS_terminal/issues)
+- **GitHub Issues**: [Report bugs or request features](https://github.com/RudraM-21/IMOS_terminal/issues)
 - **Documentation**: This README and `imos --help`
 - **Community**: Join discussions in our GitHub repository
 
